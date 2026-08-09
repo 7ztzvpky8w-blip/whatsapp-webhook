@@ -33,16 +33,16 @@ app.post("/webhook", async (req, res) => {
     const message =
       req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
+    // Ignore events that are not actual incoming messages
     if (!message) {
       return res.sendStatus(200);
     }
 
     const from = message.from;
 
+    // Reply only to text messages
     if (message.type === "text") {
-      const incomingText = message.text.body;
-
-      console.log(`Message from ${from}: ${incomingText}`);
+      console.log(`Message from ${from}: ${message.text.body}`);
 
       const response = await fetch(
         `https://graph.facebook.com/v26.0/${PHONE_NUMBER_ID}/messages`,
@@ -57,7 +57,16 @@ app.post("/webhook", async (req, res) => {
             to: from,
             type: "text",
             text: {
-              body: `Thank you for contacting The Master's Cut! We received your message: "${incomingText}"`
+              body: `👋 Thank you for contacting The Master's Cut Loyalty Programme.
+
+This WhatsApp number is used only for loyalty programme communications.
+
+For appointments, services, prices, or any other enquiries, kindly WhatsApp our official The Master's Cut number: +233 50 458 8777.
+
+Thank you for choosing The Master's Cut. ❤️
+
+─────────────
+This is an automated message. Please do not reply to this number.`
             }
           })
         }
