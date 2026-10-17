@@ -5,6 +5,7 @@ const express = require('express');
 const crypto = require('crypto');
 const app = express();
 
+// Preserve the original request body for Meta signature verification.
 app.use(express.json({
   limit: '1mb',
   verify: (req, res, buffer) => {
@@ -12,12 +13,17 @@ app.use(express.json({
   }
 }));
 
+// Environment configuration.
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "TheMastersCutWebhook";
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const OPT_OUT_API_KEY = process.env.MCR_WHATSAPP_OPTOUT_API_KEY;
 const META_APP_SECRET = process.env.META_APP_SECRET;
 
+const OPT_OUT_URL =
+  "https://rewards.themasterscutgh.com/api/whatsapp/promotional-optout";
+
+// Verify that POST requests genuinely originate from Meta.
 function verifyMetaSignature(req, res, next) {
   if (!META_APP_SECRET || !req.rawBody) {
     console.error("Meta webhook verification unavailable.");
@@ -46,9 +52,7 @@ function verifyMetaSignature(req, res, next) {
   next();
 }
 
-const OPT_OUT_URL =
-  "https://rewards.themasterscutgh.com/api/whatsapp/promotional-optout";
-
+// Promotional WhatsApp opt-out keywords.
 const STOP_WORDS = new Set([
   "STOP",
   "UNSUBSCRIBE",
@@ -57,10 +61,12 @@ const STOP_WORDS = new Set([
   "QUIT"
 ]);
 
+// Basic service health check.
 app.get("/", (req, res) => {
   res.send("WhatsApp Webhook is running.");
 });
 
+// Meta webhook verification challenge.
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -74,6 +80,7 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
+// Process only requests that pass Meta signature verification.
 app.post("/webhook", verifyMetaSignature, async (req, res) => {
   try {
     const message =
@@ -81,6 +88,13 @@ app.post("/webhook", verifyMetaSignature, async (req, res) => {
 
     // Ignore delivery receipts and other non-message events.
     if (!message) {
+      const statuses =
+        req.body?.entry?.[0]?.changes?.[0]?.value?.statuses;
+
+      if (Array.isArray(statuses) && statuses.length > 0) {
+        console.log("Verified Meta webhook: status event received.");
+      }
+
       return res.sendStatus(200);
     }
 
@@ -89,12 +103,13 @@ app.post("/webhook", verifyMetaSignature, async (req, res) => {
     if (message.type === "text") {
       const textBody = String(message.text?.body || "").trim();
 
-      // Recognize opt-out keywords, regardless of capitalization.
+      // Normalize case and trailing punctuation.
       const normalizedText = textBody
         .toUpperCase()
         .replace(/[.!?,;:]+$/g, "")
         .trim();
 
+      // Process promotional opt-out requests.
       if (STOP_WORDS.has(normalizedText)) {
         console.log("Promotional opt-out request received.");
 
@@ -143,7 +158,7 @@ app.post("/webhook", verifyMetaSignature, async (req, res) => {
 
         console.log("Rewards opt-out result:", result.status);
 
-        // Never send the normal automatic reply to an opt-out request.
+        // Do not send the ordinary auto-reply to STOP requests.
         return res.sendStatus(200);
       }
 
