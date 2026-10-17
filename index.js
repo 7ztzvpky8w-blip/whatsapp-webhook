@@ -1,13 +1,26 @@
+
 require('dotenv').config();
 
 const express = require('express');
 const app = express();
 
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "TheMastersCutWebhook";
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+const OPT_OUT_API_KEY = process.env.MCR_WHATSAPP_OPTOUT_API_KEY;
+
+const OPT_OUT_URL =
+  "https://rewards.themasterscutgh.com/api/whatsapp/promotional-optout";
+
+const STOP_WORDS = new Set([
+  "STOP",
+  "UNSUBSCRIBE",
+  "CANCEL",
+  "END",
+  "QUIT"
+]);
 
 app.get("/", (req, res) => {
   res.send("WhatsApp Webhook is running.");
@@ -27,22 +40,80 @@ app.get("/webhook", (req, res) => {
 });
 
 app.post("/webhook", async (req, res) => {
-  console.log(JSON.stringify(req.body, null, 2));
-
   try {
     const message =
       req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
-    // Ignore events that are not actual incoming messages
+    // Ignore delivery receipts and other non-message events.
     if (!message) {
       return res.sendStatus(200);
     }
 
     const from = message.from;
 
-    // Reply only to text messages
     if (message.type === "text") {
-      console.log(`Message from ${from}: ${message.text.body}`);
+      const textBody = String(message.text?.body || "").trim();
+
+      // Recognize opt-out keywords, regardless of capitalization.
+      const normalizedText = textBody
+        .toUpperCase()
+        .replace(/[.!?,;:]+$/g, "")
+        .trim();
+
+      if (STOP_WORDS.has(normalizedText)) {
+        console.log("Promotional opt-out request received.");
+
+        if (!from || !/^\d{7,15}$/.test(from)) {
+          console.error("Opt-out request has an invalid sender number.");
+          return res.sendStatus(400);
+        }
+
+        if (!OPT_OUT_API_KEY) {
+          console.error("Opt-out API key is not configured.");
+          return res.sendStatus(500);
+        }
+
+        let response;
+
+        try {
+          response = await fetch(OPT_OUT_URL, {
+            method: "POST",
+            headers: {
+              "X-API-Key": OPT_OUT_API_KEY,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              mobile: from
+            }),
+            signal: AbortSignal.timeout(10000)
+          });
+        } catch (error) {
+          console.error("Rewards opt-out service is unreachable.");
+          return res.sendStatus(502);
+        }
+
+        const result = await response.json().catch(() => null);
+
+        if (
+          !response.ok ||
+          result?.ok !== true ||
+          !["opted_out", "customer_not_found"].includes(result.status)
+        ) {
+          console.error(
+            "Rewards opt-out processing failed. HTTP status:",
+            response.status
+          );
+          return res.sendStatus(502);
+        }
+
+        console.log("Rewards opt-out result:", result.status);
+
+        // Never send the normal automatic reply to an opt-out request.
+        return res.sendStatus(200);
+      }
+
+      // Existing automatic reply for ordinary text messages.
+      console.log("Ordinary text message received.");
 
       const response = await fetch(
         `https://graph.facebook.com/v26.0/${PHONE_NUMBER_ID}/messages`,
@@ -72,19 +143,17 @@ This is an automated message. Please do not reply to this number.`
         }
       );
 
-      const result = await response.json();
-
       console.log(
-        "WhatsApp reply result:",
-        JSON.stringify(result, null, 2)
+        "Automatic reply HTTP status:",
+        response.status
       );
     }
 
-    res.sendStatus(200);
+    return res.sendStatus(200);
 
   } catch (error) {
-    console.error("Error sending WhatsApp reply:", error);
-    res.sendStatus(200);
+    console.error("Webhook processing failed.");
+    return res.sendStatus(500);
   }
 });
 
