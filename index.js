@@ -2,14 +2,49 @@
 require('dotenv').config();
 
 const express = require('express');
+const crypto = require('crypto');
 const app = express();
 
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({
+  limit: '1mb',
+  verify: (req, res, buffer) => {
+    req.rawBody = Buffer.from(buffer);
+  }
+}));
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "TheMastersCutWebhook";
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const OPT_OUT_API_KEY = process.env.MCR_WHATSAPP_OPTOUT_API_KEY;
+const META_APP_SECRET = process.env.META_APP_SECRET;
+
+function verifyMetaSignature(req, res, next) {
+  if (!META_APP_SECRET || !req.rawBody) {
+    console.error("Meta webhook verification unavailable.");
+    return res.sendStatus(403);
+  }
+
+  const signature = req.get("X-Hub-Signature-256") || "";
+
+  if (!/^sha256=[a-fA-F0-9]{64}$/.test(signature)) {
+    console.error("Missing or invalid Meta webhook signature.");
+    return res.sendStatus(403);
+  }
+
+  const expected = crypto
+    .createHmac("sha256", META_APP_SECRET)
+    .update(req.rawBody)
+    .digest();
+
+  const received = Buffer.from(signature.slice(7), "hex");
+
+  if (!crypto.timingSafeEqual(expected, received)) {
+    console.error("Meta webhook signature mismatch.");
+    return res.sendStatus(403);
+  }
+
+  next();
+}
 
 const OPT_OUT_URL =
   "https://rewards.themasterscutgh.com/api/whatsapp/promotional-optout";
@@ -39,7 +74,7 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-app.post("/webhook", async (req, res) => {
+app.post("/webhook", verifyMetaSignature, async (req, res) => {
   try {
     const message =
       req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
