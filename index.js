@@ -85,6 +85,17 @@ app.post("/webhook", verifyMetaSignature, async (req, res) => {
   try {
     const message =
       req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+        // Only process events for the configured Rewards WhatsApp number.
+    const incomingPhoneNumberId =
+      req.body?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
+
+    if (
+      !PHONE_NUMBER_ID ||
+      String(incomingPhoneNumberId || "") !== String(PHONE_NUMBER_ID)
+    ) {
+      console.log("Webhook ignored: phone number ID does not match Rewards.");
+      return res.sendStatus(200);
+    }
 
     // Ignore delivery receipts and other non-message events.
     if (!message) {
